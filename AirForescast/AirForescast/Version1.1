@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirforestCast – Monitoreo y Pronóstico de Calidad del Aire</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- (Opcional) WMTS helper -->
+    <script src="https://unpkg.com/leaflet-tilelayer-wmts/leaflet-tilelayer-wmts.js"></script>
+    <!-- Chart.js para tendencias -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <!-- Feather + Vanta -->
+    <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.globe.min.js"></script>
+
+    <style>
+        /* Escala AQI daltón-friendly */
+        .aqi-good {
+            background-color: #2ECC71;
+        }
+
+        /* verde */
+        .aqi-moderate {
+            background-color: #F1C40F;
+        }
+
+        /* amarillo */
+        .aqi-unhealthy-sens {
+            background-color: #E67E22;
+        }
+
+        /* naranja */
+        .aqi-unhealthy {
+            background-color: #E74C3C;
+        }
+
+        /* rojo */
+        .aqi-very-unhealthy {
+            background-color: #8E44AD;
+        }
+
+        /* púrpura */
+        .aqi-hazardous {
+            background-color: #7E0023;
+        }
+
+        /* borgoña */
+
+        .map-container {
+            height: 520px;
+            width: 100%;
+            border-radius: 1rem;
+            overflow: hidden;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, .1);
+        }
+
+        .data-card {
+            transition: transform .25s ease, box-shadow .25s ease;
+        }
+
+        .data-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, .1);
+        }
+
+        .badge {
+            font-size: .75rem;
+            padding: .15rem .5rem;
+            border-radius: .5rem;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50 text-gray-900">
+    <!-- HERO -->
+    <div id="vanta-globe" class="relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-b from-blue-900/80 to-blue-800/80"></div>
+        <div class="relative z-10 max-w-7xl mx-auto px-4 py-20 sm:px-6 lg:px-8 text-center">
+            <h1 class="text-4xl md:text-6xl font-extrabold text-white mb-3">AirforestCast</h1>
+            <p class="text-lg md:text-2xl text-blue-100 mb-8">
+                Monitoreo y pronóstico de la calidad del aire en tiempo casi real (TEMPO + OpenAQ + Meteorología)
+            </p>
+            <div class="flex flex-col sm:flex-row justify-center gap-3">
+                <a href="#dashboard"
+                    class="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium shadow-lg">Pizarrón</a>
+                <a href="#alerts"
+                    class="px-6 py-3 bg-white hover:bg-gray-100 rounded-lg text-blue-700 font-medium shadow-lg">Alertas</a>
+                <button id="toggleMode"
+                    class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 rounded-lg text-white font-medium shadow-lg">
+                    Modo: Simple
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <!-- DASHBOARD -->
+        <section id="dashboard" class="mb-12">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-3xl font-bold">Índice AQI en tiempo real</h2>
+                <div class="text-sm text-gray-500">
+                    Ubicación: <span id="locLabel">Detectando…</span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6" aria-live="polite">
+                <!-- AQI -->
+                <div class="data-card bg-white rounded-xl p-6 shadow-md border-l-4 border-blue-500">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-lg font-semibold">AQI actual</h3>
+                        <span id="aqiBadge" class="badge bg-gray-200 text-gray-800">—</span>
+                    </div>
+                    <p id="aqiValue" class="text-5xl font-extrabold">—</p>
+                    <p id="aqiUpdated" class="text-gray-500 text-sm mt-1">Actualizado: —</p>
+                    <p id="aqiDriver" class="text-gray-500 text-xs mt-2">Contaminante principal: —</p>
+                </div>
+
+                <!-- PM2.5 -->
+                <div class="data-card bg-white rounded-xl p-6 shadow-md border-l-4 border-yellow-500">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-lg font-semibold">PM2.5 (µg/m³)</h3>
+                        <i data-feather="wind"></i>
+                    </div>
+                    <p id="pm25Val" class="text-4xl font-bold">—</p>
+                    <p class="text-gray-500 text-sm">Guía OMS: 15 (24 h)</p>
+                </div>
+
+                <!-- O3 -->
+                <div class="data-card bg-white rounded-xl p-6 shadow-md border-l-4 border-green-500">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-lg font-semibold">Ozono O₃ (ppb)</h3>
+                        <i data-feather="sun"></i>
+                    </div>
+                    <p id="o3Val" class="text-4xl font-bold">—</p>
+                    <p class="text-gray-500 text-sm">Referencia: <span>&lt; 70</span> (8 h)</p>
+                </div>
+
+                <!-- NO2 -->
+                <div class="data-card bg-white rounded-xl p-6 shadow-md border-l-4 border-red-500">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-lg font-semibold">NO₂ (ppb)</h3>
+                        <i data-feather="activity"></i>
+                    </div>
+                    <p id="no2Val" class="text-4xl font-bold">—</p>
+                    <p class="text-gray-500 text-sm">Referencia EPA: 53 (anual)</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- MAPA -->
+        <section class="mb-12">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-3xl font-bold">Mapa interactivo</h2>
+                <div class="flex gap-2">
+                    <button id="btnLayers" class="px-3 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2">
+                        <i data-feather="layers" class="w-4 h-4"></i> Capas
+                    </button>
+                    <button id="btnFilters"
+                        class="px-3 py-2 bg-white border border-gray-300 rounded-lg flex items-center gap-2">
+                        <i data-feather="filter" class="w-4 h-4"></i> Filtros
+                    </button>
+                    <button id="btnExport"
+                        class="px-3 py-2 bg-emerald-600 text-white rounded-lg flex items-center gap-2">
+                        <i data-feather="download"></i> Exportar
+                    </button>
+                </div>
+            </div>
+
+            <div id="map" class="map-container bg-gray-200" role="application" aria-label="Mapa de calidad del aire">
+            </div>
+
+            <div class="mt-4 flex flex-wrap gap-3 text-sm">
+                <div class="flex items-center"><span class="w-4 h-4 rounded-full aqi-good mr-2"></span> Bueno (0–50)
+                </div>
+                <div class="flex items-center"><span class="w-4 h-4 rounded-full aqi-moderate mr-2"></span> Moderado
+                    (51–100)</div>
+                <div class="flex items-center"><span class="w-4 h-4 rounded-full aqi-unhealthy-sens mr-2"></span>
+                    Sensibles en riesgo (101–150)</div>
+                <div class="flex items-center"><span class="w-4 h-4 rounded-full aqi-unhealthy mr-2"></span> Insalubre
+                    (151–200)</div>
+                <div class="flex items-center"><span class="w-4 h-4 rounded-full aqi-very-unhealthy mr-2"></span> Muy
+                    insalubre (201–300)</div>
+                <div class="flex items-center"><span class="w-4 h-4 rounded-full aqi-hazardous mr-2"></span> Peligroso
+                    (301+)</div>
+            </div>
+        </section>
+
+        <!-- PRONÓSTICO -->
+        <section class="mb-12">
+            <h2 class="text-3xl font-bold mb-4">Pronóstico local (24 h / 72 h)</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="lg:col-span-2 bg-white rounded-xl shadow-md p-6">
+                    <canvas id="trendChart" height="120" aria-label="Gráfica de tendencia de AQI y PM2.5"
+                        role="img"></canvas>
+                </div>
+                <div class="bg-white rounded-xl shadow-md p-6">
+                    <h3 class="text-xl font-semibold mb-3">Resumen</h3>
+                    <ul id="forecastList" class="space-y-2 text-sm"></ul>
+                    <div class="mt-4">
+                        <h4 class="font-semibold mb-1">Recomendaciones</h4>
+                        <p id="adviceText" class="text-gray-700 text-sm">—</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ALERTAS -->
+        <section id="alerts" class="mb-12">
+            <h2 class="text-3xl font-bold mb-4">Alertas y notificaciones</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <form id="alertsForm" class="bg-white rounded-xl shadow-md p-6">
+                    <h3 class="text-xl font-semibold mb-4">Preferencias</h3>
+                    <label class="block text-sm mb-2">Ubicación</label>
+                    <input id="prefLocation" type="text" class="w-full px-3 py-2 border rounded-md mb-4"
+                        placeholder="Ej. Cusco, PE (o deja tu geolocalización)" />
+
+                    <label class="block text-sm mb-2">Umbral de AQI</label>
+                    <select id="prefThreshold" class="w-full px-3 py-2 border rounded-md mb-4">
+                        <option value="50">Bueno (50)</option>
+                        <option value="100">Moderado (100)</option>
+                        <option value="150" selected>Vulnerables (150)</option>
+                        <option value="200">Insalubre (200)</option>
+                        <option value="300">Muy insalubre (300)</option>
+                    </select>
+
+                    <label class="block text-sm mb-2">Grupo de salud</label>
+                    <select id="prefGroup" class="w-full px-3 py-2 border rounded-md mb-4">
+                        <option value="general">Población general</option>
+                        <option value="kids">Niños</option>
+                        <option value="elderly">Adultos mayores</option>
+                        <option value="asthma">Personas con asma</option>
+                        <option value="outdoor">Trabajadores al aire libre</option>
+                    </select>
+
+                    <fieldset class="mb-4">
+                        <legend class="block text-sm mb-2">Vías de notificación</legend>
+                        <label class="flex items-center gap-2 mb-1"><input id="notifPush" type="checkbox"
+                                class="accent-blue-600" checked /> Notificación del navegador</label>
+                        <label class="flex items-center gap-2 mb-1"><input id="notifEmail" type="checkbox"
+                                class="accent-blue-600" /> Email (placeholder)</label>
+                        <label class="flex items-center gap-2"><input id="notifSMS" type="checkbox"
+                                class="accent-blue-600" /> SMS (placeholder)</label>
+                    </fieldset>
+
+                    <button
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-md">Guardar</button>
+                    <p id="alertsSaved" class="text-emerald-700 text-sm mt-3 hidden">Preferencias guardadas.</p>
+                </form>
+
+                <div class="bg-white rounded-xl shadow-md p-6">
+                    <h3 class="text-xl font-semibold mb-4">Consejos de salud</h3>
+                    <div class="space-y-3 text-sm">
+                        <div><span class="font-semibold">General:</span> Si AQI ≤ 100, actividades normales. Si &gt;
+                            100, reduce exposición prolongada.</div>
+                        <div><span class="font-semibold">Niños/asmáticos:</span> Evitar esfuerzos al aire libre si AQI
+                            &gt; 100; llevar medicación.</div>
+                        <div><span class="font-semibold">Adultos mayores:</span> Priorizar interiores bien ventilados si
+                            AQI &gt; 100.</div>
+                        <div><span class="font-semibold">Eventos extremos:</span> Incendios/tormentas de polvo → usar
+                            mascarilla P2/P3 y sellar interiores.</div>
+                    </div>
+                </div>
+            </div>
+            <div id="bannerAlert" class="hidden mt-4 p-4 rounded-lg bg-red-600 text-white">
+                ⚠️ Alerta: AQI superó tu umbral configurado. Revisa recomendaciones y considera limitar actividades al
+                aire libre.
+            </div>
+        </section>
+
+        <!-- FUENTES / INTEGRACIÓN -->
+        <section class="mb-12">
+            <h2 class="text-3xl font-bold mb-4">Integración y validación de datos</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div class="data-card bg-white rounded-xl p-6 shadow-md text-center">
+                    <div class="h-16 w-16 mx-auto mb-3 flex items-center justify-center bg-blue-100 rounded-full">
+                        <i data-feather="satellite" class="text-blue-600"></i>
+                    </div>
+                    <h3 class="font-semibold">TEMPO (Satélite)</h3>
+                    <p class="text-sm text-gray-600">NO₂/O₃/… en tiempo casi real. <span
+                            class="block mt-1 text-xs">TODO: vincular WMTS/tiles de tu endpoint TEMPO oficial.</span>
+                    </p>
+                </div>
+                <div class="data-card bg-white rounded-xl p-6 shadow-md text-center">
+                    <div class="h-16 w-16 mx-auto mb-3 flex items-center justify-center bg-green-100 rounded-full">
+                        <i data-feather="home" class="text-green-600"></i>
+                    </div>
+                    <h3 class="font-semibold">OpenAQ (Superficie)</h3>
+                    <p class="text-sm text-gray-600">Red abierta de estaciones (PM2.5, NO₂, O₃, etc.).</p>
+                </div>
+                <div class="data-card bg-white rounded-xl p-6 shadow-md text-center">
+                    <div class="h-16 w-16 mx-auto mb-3 flex items-center justify-center bg-purple-100 rounded-full">
+                        <i data-feather="activity" class="text-purple-600"></i>
+                    </div>
+                    <h3 class="font-semibold">Pandora / TOLNet</h3>
+                    <p class="text-sm text-gray-600">Columnas troposféricas / perfiles. <span
+                            class="block text-xs">TODO: integrar feed/API de tu nodo/servidor.</span></p>
+                </div>
+                <div class="data-card bg-white rounded-xl p-6 shadow-md text-center">
+                    <div class="h-16 w-16 mx-auto mb-3 flex items-center justify-center bg-sky-100 rounded-full">
+                        <i data-feather="cloud-rain" class="text-sky-600"></i>
+                    </div>
+                    <h3 class="font-semibold">Meteorología</h3>
+                    <p class="text-sm text-gray-600">Open-Meteo: temperatura, viento, humedad, precipitación.</p>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-md p-6 mt-6">
+                <h3 class="text-xl font-semibold mb-2">Validación cruzada</h3>
+                <p class="text-sm text-gray-700 mb-3">Se compara la señal satelital (capa TEMPO) vs. estación más
+                    cercana (OpenAQ) y condiciones meteo; se reporta el sesgo y error absoluto medio.</p>
+                <ul id="validationList" class="text-sm list-disc pl-5 space-y-1"></ul>
+            </div>
+        </section>
+
+        <!-- APLICACIONES -->
+        <section class="mb-6">
+            <h2 class="text-3xl font-bold mb-4">Aplicaciones</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="bg-white rounded-xl shadow-md p-6">
+                    <h3 class="font-semibold mb-2">Actividad al aire libre</h3>
+                    <p id="outdoorAdvice" class="text-sm text-gray-700">—</p>
+                </div>
+                <div class="bg-white rounded-xl shadow-md p-6">
+                    <h3 class="font-semibold mb-2">Movilidad urbana</h3>
+                    <p class="text-sm text-gray-700">Sugerir rutas con menor exposición (TODO: integrar GTFS o APIs de
+                        tránsito).</p>
+                </div>
+                <div class="bg-white rounded-xl shadow-md p-6">
+                    <h3 class="font-semibold mb-2">Exportables</h3>
+                    <p class="text-sm text-gray-700">Descarga CSV/JSON para hospitales, escuelas y gobiernos.</p>
+                    <div class="mt-3 flex gap-2">
+                        <button id="btnCSV" class="px-3 py-2 bg-gray-800 text-white rounded-md">CSV</button>
+                        <button id="btnJSON" class="px-3 py-2 bg-gray-800 text-white rounded-md">JSON</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="bg-gray-900 text-white py-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-4 gap-8">
+            <div>
+                <h3 class="text-lg font-semibold mb-2">AirforestCast</h3>
+                <p class="text-gray-300 text-sm">Proteger la salud con datos abiertos y pronósticos accionables.</p>
+            </div>
+            <div>
+                <h3 class="text-lg font-semibold mb-2">Secciones</h3>
+                <ul class="space-y-1 text-gray-300 text-sm">
+                    <li><a href="#dashboard" class="hover:underline">Pizarrón</a></li>
+                    <li><a href="#alerts" class="hover:underline">Alertas</a></li>
+                    <li><a href="#map" class="hover:underline">Mapa</a></li>
+                    <li><a href="#" class="hover:underline">FAQ</a></li>
+                </ul>
+            </div>
+            <div>
+                <h3 class="text-lg font-semibold mb-2">Recursos</h3>
+                <ul class="space-y-1 text-gray-300 text-sm">
+                    <li>OpenAQ API</li>
+                    <li>Open-Meteo API</li>
+                    <li>TEMPO (Space Apps)</li>
+                    <li>Pandora / TolNet</li>
+                </ul>
+            </div>
+            <div>
+                <h3 class="text-lg font-semibold mb-2">Boletín</h3>
+                <div class="flex">
+                    <input id="mailInput" type="email" placeholder="Tu email"
+                        class="px-3 py-2 text-gray-900 rounded-l-md w-full" />
+                    <button id="mailBtn" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-r-md">
+                        <i data-feather="send"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="border-t border-gray-800 mt-8 pt-4 text-center text-gray-400 text-sm">
+            © 2025 AirforestCast. Todos los derechos reservados.
+        </div>
+    </footer>
+
+    <!-- SCRIPTS -->
+    <script>
+        // Vanta
+        VANTA.GLOBE({
+            el: "#vanta-globe", mouseControls: true, touchControls: true,
+            color: 0x3a86ff, backgroundColor: 0x111827, size: 0.8
+        });
+
+        // Feather
+        feather.replace();
+
+        /**********************
+         * CONFIG / ENDPOINTS *
+         **********************/
+        const STATE = {
+            coords: { lat: -13.5320, lon: -71.9675 }, // Cusco por defecto
+            aq: { pm25: null, no2: null, o3: null, aqi: null, driver: null, updated: null },
+            meteo: null,
+            history: [], // {ts, pm25, aqi}
+            stations: [], // OpenAQ stations/measurements plotted
+            validation: [], // cross-validation notes
+            prefs: { threshold: 150, group: 'general', location: null, notif: { push: true, email: false, sms: false } }
+        };
+
+        const ENDPOINTS = {
+            openaqLatest: (lat, lon) =>
+                `https://api.openaq.org/v2/latest?coordinates=${lat},${lon}&radius=50000&limit=100&parameter=pm25,no2,o3`,
+            openaqHourly: (lat, lon) =>
+                `https://api.openaq.org/v2/measurements?coordinates=${lat},${lon}&radius=50000&limit=48&parameter=pm25&order_by=datetime&sort=desc`,
+            openMeteo: (lat, lon) =>
+                `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m&forecast_days=3&timezone=auto`
+        };
+
+        /****************
+         * LEAFLET MAP  *
+         ****************/
+        const map = L.map('map', { zoomControl: true, preferCanvas: true }).setView([STATE.coords.lat, STATE.coords.lon], 10);
+
+        const baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19, attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // TODO TEMPO WMTS (reemplaza la URL por tu servicio real)
+        // Ejemplo: const tempoNO2 = L.tileLayer.wmts('https://<tu-servidor-wmts>', {
+        //   layer:'TEMPO_NO2', style:'default', tilematrixSet:'EPSG:3857', format:'image/png', opacity:0.6
+        // });
+        // Para demo mostramos una capa GIBS de aerosol AOD (no es TEMPO):
+        const gibsAOD = L.tileLayer(
+            'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_Aerosol/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png',
+            { opacity: 0.55, attribution: 'NASA GIBS (demo)', zIndex: 5 }
+        );
+
+        const openaqLayer = L.layerGroup().addTo(map);
+        const meteoLayer = L.layerGroup();
+
+        const overlays = {
+            "Aerosoles (demo)": gibsAOD,
+            "Estaciones OpenAQ": openaqLayer,
+            "Meteo (viento/lluvia)": meteoLayer
+        };
+        L.control.layers({ "OSM": baseOSM }, overlays, { collapsed: true }).addTo(map);
+
+        /**********************
+         * AQI CALC (PM2.5)  *
+         * EPA breakpoint fn *
+         **********************/
+        function aqiFromPM25(c) {
+            if (c == null) return null;
+            const bp = [
+                { c: [0.0, 12.0], a: [0, 50] },
+                { c: [12.1, 35.4], a: [51, 100] },
+                { c: [35.5, 55.4], a: [101, 150] },
+                { c: [55.5, 150.4], a: [151, 200] },
+                { c: [150.5, 250.4], a: [201, 300] },
+                { c: [250.5, 500.4], a: [301, 500] },
+            ];
+            for (const b of bp) {
+                if (c >= b.c[0] && c <= b.c[1]) {
+                    const [Cl, Ch] = b.c, [Il, Ih] = b.a;
+                    return Math.round((Ih - Il) / (Ch - Cl) * (c - Cl) + Il);
+                }
+            }
+            return 500;
+        }
+        function aqiClass(aqi) {
+            if (aqi <= 50) return { cls: 'aqi-good', label: 'Bueno' };
+            if (aqi <= 100) return { cls: 'aqi-moderate', label: 'Moderado' };
+            if (aqi <= 150) return { cls: 'aqi-unhealthy-sens', label: 'Sensibles en riesgo' };
+            if (aqi <= 200) return { cls: 'aqi-unhealthy', label: 'Insalubre' };
+            if (aqi <= 300) return { cls: 'aqi-very-unhealthy', label: 'Muy insalubre' };
+            return { cls: 'aqi-hazardous', label: 'Peligroso' };
+        }
+
+        /**********************
+         * FETCH DATA (OPEN)  *
+         **********************/
+        async function fetchOpenAQ(lat, lon) {
+            const res = await fetch(ENDPOINTS.openaqLatest(lat, lon));
+            const json = await res.json();
+            // limpiar capa
+            openaqLayer.clearLayers();
+            let nearestPM25 = null, nearestO3 = null, nearestNO2 = null, nearestDist = Infinity, upd = '—';
+
+            json?.results?.forEach(r => {
+                const [la, lo] = [r.coordinates.latitude, r.coordinates.longitude];
+                const m = {};
+                r.measurements.forEach(mm => { m[mm.parameter] = mm; });
+                const pm25 = m.pm25?.value ?? null;
+                const o3 = m.o3?.value ?? null;
+                const no2 = m.no2?.value ?? null;
+
+                // marcador
+                const aqi = aqiFromPM25(pm25);
+                const cls = aqiClass(aqi || 0).cls;
+                const circle = L.circleMarker([la, lo], {
+                    radius: 7, weight: 1, color: '#111', opacity: 0.6,
+                    fillColor: getColorForAQI(aqi), fillOpacity: 0.9
+                }).bindPopup(`
+          <div class="text-sm">
+            <div class="font-semibold mb-1">${r.city ?? 'Estación'}</div>
+            <div>PM2.5: <b>${pm25 ?? '—'}</b> µg/m³</div>
+            <div>O₃: <b>${o3 ?? '—'}</b> ppb</div>
+            <div>NO₂: <b>${no2 ?? '—'}</b> ppb</div>
+            <div class="mt-1">AQI (PM2.5): <span class="badge ${cls} text-white">${aqi ?? '—'}</span></div>
+          </div>
+        `);
+                circle.addTo(openaqLayer);
+
+                // elegir estación más cercana
+                const d = haversine(lat, lon, la, lo);
+                if (d < nearestDist) {
+                    nearestDist = d; upd = m.pm25?.lastUpdated || r?.measurements?.[0]?.lastUpdated || '—';
+                    nearestPM25 = pm25; nearestO3 = o3; nearestNO2 = no2;
+                }
+            });
+
+            STATE.aq.pm25 = nearestPM25;
+            STATE.aq.o3 = nearestO3;
+            STATE.aq.no2 = nearestNO2;
+            STATE.aq.aqi = aqiFromPM25(nearestPM25);
+            STATE.aq.driver = 'PM2.5';
+            STATE.aq.updated = upd;
+
+            updateHeaderCards();
+            // guardar historia (simple)
+            if (STATE.aq.aqi != null) {
+                STATE.history.unshift({ ts: Date.now(), pm25: STATE.aq.pm25, aqi: STATE.aq.aqi });
+                STATE.history = STATE.history.slice(0, 72); // 72 horas
+            }
+        }
+
+        async function fetchMeteo(lat, lon) {
+            const res = await fetch(ENDPOINTS.openMeteo(lat, lon));
+            const json = await res.json();
+            STATE.meteo = json;
+            drawMeteoLayer(json);
+        }
+
+        function drawMeteoLayer(mj) {
+            meteoLayer.clearLayers();
+            // viento (flechas) y precipitación (círculos)
+            // Para simplicidad, mostramos un “vector” promedio con tooltip.
+            const ws = mj?.hourly?.wind_speed_10m?.[0] ?? null;
+            const pr = mj?.hourly?.precipitation?.[0] ?? null;
+            if (ws != null) {
+                L.marker([STATE.coords.lat, STATE.coords.lon], { opacity: 0.7 })
+                    .bindTooltip(`Viento 10 m: ${ws} m/s<br>Precipitación: ${pr ?? 0} mm`, { direction: 'top' })
+                    .addTo(meteoLayer);
+            }
+        }
+
+        /*********************
+         * UI ACTUALIZATION  *
+         *********************/
+        function updateHeaderCards() {
+            const { pm25, no2, o3, aqi, driver, updated } = STATE.aq;
+
+            document.getElementById('pm25Val').textContent = pm25 != null ? pm25.toFixed(1) : '—';
+            document.getElementById('no2Val').textContent = no2 != null ? Math.round(no2) : '—';
+            document.getElementById('o3Val').textContent = o3 != null ? Math.round(o3) : '—';
+
+            document.getElementById('aqiValue').textContent = aqi != null ? aqi : '—';
+            document.getElementById('aqiUpdated').textContent = `Actualizado: ${formatTime(updated)}`;
+            document.getElementById('aqiDriver').textContent = `Contaminante principal: ${driver ?? '—'}`;
+
+            const badge = document.getElementById('aqiBadge');
+            badge.className = 'badge text-white ' + aqiClass(aqi || 0).cls;
+            badge.textContent = aqi != null ? aqiClass(aqi).label : '—';
+
+            // Alertas
+            maybeAlert(aqi);
+            // Consejos
+            document.getElementById('outdoorAdvice').textContent = adviceForAQI(aqi, STATE.prefs.group);
+            document.getElementById('adviceText').textContent = adviceForAQI(aqi, STATE.prefs.group);
+            // Charts + Forecast
+            renderTrendChart();
+            buildForecast();
+            // Validación cruzada (placeholder comparando “sat vs surface”)
+            buildValidation();
+        }
+
+        function getColorForAQI(aqi) {
+            const c = aqiClass(aqi || 0).cls;
+            return getComputedStyle(document.documentElement)
+                .getPropertyValue('--' + c) || // si definen custom props
+                (c === 'aqi-good' ? '#2ECC71' :
+                    c === 'aqi-moderate' ? '#F1C40F' :
+                        c === 'aqi-unhealthy-sens' ? '#E67E22' :
+                            c === 'aqi-unhealthy' ? '#E74C3C' :
+                                c === 'aqi-very-unhealthy' ? '#8E44AD' : '#7E0023');
+        }
+
+        /****************
+         * FORECASTING  *
+         * (sencillo)   *
+         ****************/
+        function buildForecast() {
+            // pronóstico naive 24h/72h: persistencia +/- ajuste por viento y precipitación
+            const last = STATE.history[0];
+            if (!last || !STATE.meteo) return;
+
+            const wsArr = STATE.meteo.hourly.wind_speed_10m.slice(0, 24);
+            const prArr = STATE.meteo.hourly.precipitation.slice(0, 24);
+
+            const fc24 = Math.max(0, last.aqi - avg(wsArr) * 2 + (sum(prArr) > 1 ? -5 : 0));
+            const fc72 = Math.max(0, last.aqi - avg(STATE.meteo.hourly.wind_speed_10m.slice(0, 72)) * 2 + (sum(STATE.meteo.hourly.precipitation.slice(0, 72)) > 3 ? -8 : 0));
+
+            const list = document.getElementById('forecastList');
+            list.innerHTML = `
+        <li>Ahora: AQI ≈ <b>${last.aqi}</b></li>
+        <li>+24 h: AQI ≈ <b>${Math.round(fc24)}</b> (persistencia ajustada por viento/lluvia)</li>
+        <li>+72 h: AQI ≈ <b>${Math.round(fc72)}</b></li>
+      `;
+        }
+
+        /**********
+         * CHART  *
+         **********/
+        let chartRef = null;
+        function renderTrendChart() {
+            const el = document.getElementById('trendChart');
+            const labels = STATE.history.map(h => new Date(h.ts).toLocaleTimeString()).reverse();
+            const aqiSeries = STATE.history.map(h => h.aqi).reverse();
+            const pmSeries = STATE.history.map(h => h.pm25).reverse();
+
+            if (chartRef) { chartRef.destroy(); }
+            chartRef = new Chart(el, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        { label: 'AQI (PM2.5)', data: aqiSeries, tension: .35 },
+                        { label: 'PM2.5 (µg/m³)', data: pmSeries, yAxisID: 'y2', tension: .35 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        y: { title: { display: true, text: 'AQI' } },
+                        y2: { position: 'right', title: { display: true, text: 'µg/m³' } }
+                    },
+                    plugins: { legend: { display: true } }
+                }
+            });
+        }
+
+        /*****************
+         * VALIDATION    *
+         *****************/
+        function buildValidation() {
+            // Placeholder: “comparación” simple entre capa satélite (demo) y superficie
+            // (Cuando conectes TEMPO real, aquí calcula sesgo/MAE vs OpenAQ)
+            const pm = STATE.aq.pm25;
+            const note = pm != null
+                ? `Sesgo estimado sat-superficie ≈ +${(pm * 0.05).toFixed(1)} (demo)`
+                : `Sin estación cercana para validar.`;
+            STATE.validation = [note, 'MAE (demo): ~3.2'];
+            const ul = document.getElementById('validationList');
+            ul.innerHTML = STATE.validation.map(n => `<li>${n}</li>`).join('');
+        }
+
+        /*****************
+         * ALERTS/PREFS  *
+         *****************/
+        function maybeAlert(aqi) {
+            const banner = document.getElementById('bannerAlert');
+            if (!aqi) return;
+            if (aqi >= (STATE.prefs.threshold || 150)) {
+                banner.classList.remove('hidden');
+                if (STATE.prefs?.notif?.push) notify(`AQI ${aqi}: superó tu umbral`);
+            } else {
+                banner.classList.add('hidden');
+            }
+        }
+
+        function notify(msg) {
+            if (!("Notification" in window)) return;
+            if (Notification.permission === "granted") {
+                new Notification("AirforestCast", { body: msg });
+            } else if (Notification.permission !== "denied") {
+                Notification.requestPermission().then(p => {
+                    if (p === "granted") new Notification("AirforestCast", { body: msg });
+                });
+            }
+        }
+
+        document.getElementById('alertsForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            STATE.prefs.location = document.getElementById('prefLocation').value || null;
+            STATE.prefs.threshold = parseInt(document.getElementById('prefThreshold').value, 10);
+            STATE.prefs.group = document.getElementById('prefGroup').value;
+            STATE.prefs.notif = {
+                push: document.getElementById('notifPush').checked,
+                email: document.getElementById('notifEmail').checked,
+                sms: document.getElementById('notifSMS').checked
+            };
+            document.getElementById('alertsSaved').classList.remove('hidden');
+            setTimeout(() => document.getElementById('alertsSaved').classList.add('hidden'), 2500);
+        });
+
+        /*******************
+         * EXPORT (CSV/JSON)
+         *******************/
+        document.getElementById('btnExport').addEventListener('click', () => downloadJSON('map_data.json', { stations: STATE.stations }));
+        document.getElementById('btnCSV').addEventListener('click', () => {
+            const rows = [['ts', 'pm25', 'aqi'], ...STATE.history.map(h => [new Date(h.ts).toISOString(), h.pm25, h.aqi])];
+            downloadCSV('history.csv', rows);
+        });
+        document.getElementById('btnJSON').addEventListener('click', () => downloadJSON('history.json', STATE.history));
+
+        function downloadJSON(filename, obj) {
+            const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+        }
+        function downloadCSV(filename, rows) {
+            const csv = rows.map(r => r.join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+        }
+
+        /*******************
+         * SIMPLE/EXPERT   *
+         *******************/
+        const toggleBtn = document.getElementById('toggleMode');
+        let expert = false;
+        toggleBtn.addEventListener('click', () => {
+            expert = !expert;
+            toggleBtn.textContent = `Modo: ${expert ? 'Experto' : 'Simple'}`;
+            document.querySelectorAll('.expert-only').forEach(el => el.classList.toggle('hidden', !expert));
+        });
+
+        /************
+         * HELPERS  *
+         ************/
+        function formatTime(ts) {
+            if (!ts) return '—';
+            try { return new Date(ts).toLocaleString(); } catch { return String(ts); }
+        }
+        function avg(a) { return a.reduce((s, v) => s + (+v || 0), 0) / Math.max(1, a.length); }
+        function sum(a) { return a.reduce((s, v) => s + (+v || 0), 0); }
+        function haversine(lat1, lon1, lat2, lon2) {
+            const R = 6371e3, toRad = d => d * Math.PI / 180;
+            const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+            return 2 * R * Math.asin(Math.sqrt(a));
+        }
+
+        /*********************
+         * GEO + FIRST LOAD  *
+         *********************/
+        function setLocLabel() { document.getElementById('locLabel').textContent = `${STATE.coords.lat.toFixed(4)}, ${STATE.coords.lon.toFixed(4)}`; }
+        async function refreshAll() {
+            setLocLabel();
+            await fetchOpenAQ(STATE.coords.lat, STATE.coords.lon);
+            await fetchMeteo(STATE.coords.lat, STATE.coords.lon);
+        }
+
+        // Ubicación: usar geolocalización si está disponible
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(pos => {
+                STATE.coords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+                map.setView([STATE.coords.lat, STATE.coords.lon], 11);
+                refreshAll();
+            }, _err => { refreshAll(); });
+        } else {
+            refreshAll();
+        }
+
+        // Actualiza cada 5 min
+        setInterval(refreshAll, 5 * 60 * 1000);
+
+        // Newsletter (placeholder)
+        document.getElementById('mailBtn').addEventListener('click', () => {
+            const mail = document.getElementById('mailInput').value;
+            if (!mail || !mail.includes('@')) return alert('Ingresa un correo válido.');
+            // TODO: enviar al backend
+            alert('¡Gracias! Te hemos suscrito (demo).');
+        });
+    </script>
+</body>
+
+</html>

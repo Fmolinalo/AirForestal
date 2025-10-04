@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirforestCast - moni</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+    <style>
+        .data-card { transition: all .3s ease; }
+        .data-card:hover { transform: translateY(-5px); }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Tu contenido HTML anterior permanece igual -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <!-- Controls -->
+        <div class="mb-6 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            <div class="text-gray-700 font-medium">City:</div>
+            <div class="flex gap-2 w-full sm:w-auto">
+                <input id="city-input" class="px-3 py-2 border border-gray-300 rounded-md w-full sm:w-64"
+                    placeholder="e.g. Lima, Mexico City, Bogotá" value="Lima" />
+                <button id="city-btn"
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md">Load</button>
+            </div>
+            <div id="last-updated" class="text-sm text-gray-500 sm:ml-auto"></div>
+        </div>A
+
+        <!-- Real-time AQI Section -->
+        <section id="dashboard" class="mb-16">
+            <h2 class="text-3xl font-bold text-gray-900 mb-6">Real-time Air Quality Index</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <!-- AQI Card -->
+                <div class="data-card bg-white rounded-xl p-6 shadow-md border-l-4 border-blue-500">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-700">Current AQI</h3>
+                        <div id="aqi-badge" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 text-sm font-medium">—</div>
+                    </div>
+                    <p id="aqi-value" class="text-4xl font-bold text-gray-900 mb-2">—</p>
+                    <p class="text-gray-500 text-sm">Source: OpenAQ (PM2.5 AQI)</p>
+                </div>
+
+                <!-- PM2.5 Card -->
+                <div class="data-card bg-white rounded-xl p-6 shadow-md border-l-4 border-yellow-500">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-700">PM2.5</h3>
+                        <i data-feather="wind" class="text-yellow-500"></i>
+                    </div>
+                    <p id="pm25-value" class="text-4xl font-bold text-gray-900 mb-2">—</p>
+                    <p class="text-gray-500 text-sm">WHO limit (annual): 10 µg/m³</p>
+                </div>
+
+                <!-- Ozone Card -->
+                <div class="data-card bg-white rounded-xl p-6 shadow-md border-l-4 border-green-500">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-700">Ozone</h3>
+                        <i data-feather="sun" class="text-green-500"></i>
+                    </div>
+                    <p id="o3-value" class="text-4xl font-bold text-gray-900 mb-2">—</p>
+                    <p class="text-gray-500 text-sm">Typical unit: ppb</p>
+                </div>
+
+                <!-- NO2 Card -->
+                <div class="data-card bg-white rounded-xl p-6 shadow-md border-l-4 border-red-500">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-700">NO₂</h3>
+                        <i data-feather="activity" class="text-red-500"></i>
+                    </div>
+                    <p id="no2-value" class="text-4xl font-bold text-gray-900 mb-2">—</p>
+                    <p class="text-gray-500 text-sm">EPA 1-hour std: 100 ppb</p>
+                </div>
+            </div>
+            <p id="status" class="mt-3 text-sm text-gray-600"></p>
+        </section>
+    </div>
+
+    <script>feather.replace();</script>
+
+    <!-- JavaScript corregido con proxy CORS -->
+    <script>
+        const cityInput = document.getElementById('city-input');
+        const cityBtn = document.getElementById('city-btn');
+        const statusEl = document.getElementById('status');
+        const lastUpdatedEl = document.getElementById('last-updated');
+        const aqiValueEl = document.getElementById('aqi-value');
+        const aqiBadgeEl = document.getElementById('aqi-badge');
+        const pm25El = document.getElementById('pm25-value');
+        const o3El = document.getElementById('o3-value');
+        const no2El = document.getElementById('no2-value');
+
+        // Función para calcular AQI desde PM2.5
+        function aqiFromPM25(pm25) {
+            if (pm25 === null || pm25 === undefined) return null;
+            
+            const breakpoints = [
+                { pmLow: 0, pmHigh: 12.0, aqiLow: 0, aqiHigh: 50, category: 'Good' },
+                { pmLow: 12.1, pmHigh: 35.4, aqiLow: 51, aqiHigh: 100, category: 'Moderate' },
+                { pmLow: 35.5, pmHigh: 55.4, aqiLow: 101, aqiHigh: 150, category: 'Unhealthy for Sensitive Groups' },
+                { pmLow: 55.5, pmHigh: 150.4, aqiLow: 151, aqiHigh: 200, category: 'Unhealthy' },
+                { pmLow: 150.5, pmHigh: 250.4, aqiLow: 201, aqiHigh: 300, category: 'Very Unhealthy' },
+                { pmLow: 250.5, pmHigh: 500.4, aqiLow: 301, aqiHigh: 500, category: 'Hazardous' }
+            ];
+
+            const bp = breakpoints.find(b => pm25 >= b.pmLow && pm25 <= b.pmHigh);
+            if (!bp) return null;
+
+            const aqi = Math.round(
+                ((bp.aqiHigh - bp.aqiLow) / (bp.pmHigh - bp.pmLow)) * 
+                (pm25 - bp.pmLow) + bp.aqiLow
+            );
+
+            const colorClass = {
+                'Good': 'bg-green-100 text-green-800',
+                'Moderate': 'bg-yellow-100 text-yellow-800',
+                'Unhealthy for Sensitive Groups': 'bg-orange-100 text-orange-800',
+                'Unhealthy': 'bg-red-100 text-red-800',
+                'Very Unhealthy': 'bg-purple-100 text-purple-800',
+                'Hazardous': 'bg-rose-100 text-rose-800'
+            }[bp.category];
+
+            return { aqi, category: bp.category, colorClass };
+        }
+
+        // Función con proxy CORS
+        async function fetchOpenAQ(city) {
+            // Usar proxy CORS - varias opciones:
+            const proxies = [
+                'https://api.allorigins.win/raw?url=',
+                'https://corsproxy.io/?',
+                'https://proxy.cors.sh/'
+            ];
+
+            const targetUrl = `https://api.openaq.org/v2/latest?city=${encodeURIComponent(city)}&limit=100&parameter=pm25,o3,no2&sort=desc&order_by=lastUpdated`;
+            
+            // Intentar con diferentes proxies
+            for (const proxy of proxies) {
+                try {
+                    statusEl.textContent = `Fetching data for "${city}"...`;
+                    statusEl.className = 'mt-3 text-sm text-blue-600';
+                    
+                    const proxyUrl = proxy === 'https://proxy.cors.sh/' 
+                        ? 'https://proxy.cors.sh/' + targetUrl
+                        : proxy + encodeURIComponent(targetUrl);
+                    
+                    console.log('Trying proxy:', proxy);
+                    
+                    const response = await fetch(proxyUrl, {
+                        headers: proxy.includes('cors.sh') ? {
+                            'x-cors-api-key': 'temp_0b063c658c58c2e4d597e26a1e5e41e3'
+                        } : {}
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log('Success with proxy:', proxy);
+                        return data;
+                    }
+                } catch (error) {
+                    console.log(`Proxy ${proxy} failed:`, error);
+                    continue;
+                }
+            }
+            
+            throw new Error('All CORS proxies failed. Please try again later.');
+        }
+
+        // Función para procesar datos
+        function aggregateData(data) {
+            const result = {
+                pm25: null,
+                o3: null,
+                no2: null,
+                lastUpdated: null
+            };
+
+            if (!data.results || !Array.isArray(data.results)) {
+                return result;
+            }
+
+            data.results.forEach(location => {
+                if (!location.measurements) return;
+
+                location.measurements.forEach(measurement => {
+                    const param = measurement.parameter?.toLowerCase();
+                    const value = Number(measurement.value);
+                    const lastUpdated = new Date(measurement.lastUpdated);
+
+                    if (!isNaN(value) && (param === 'pm25' || param === 'o3' || param === 'no2')) {
+                        if (!result[param] || lastUpdated > new Date(result[param].lastUpdated)) {
+                            result[param] = {
+                                value: value,
+                                unit: measurement.unit,
+                                lastUpdated: measurement.lastUpdated
+                            };
+                        }
+
+                        if (!result.lastUpdated || lastUpdated > new Date(result.lastUpdated)) {
+                            result.lastUpdated = measurement.lastUpdated;
+                        }
+                    }
+                });
+            });
+
+            return result;
+        }
+
+        function setAQIBadge(category, colorClass) {
+            aqiBadgeEl.textContent = category || '—';
+            aqiBadgeEl.className = `px-3 py-1 rounded-full text-sm font-medium ${colorClass || 'bg-gray-100 text-gray-800'}`;
+        }
+
+        function formatValue(value, unit) {
+            if (value === null || value === undefined) return '—';
+            return `${Number(value).toFixed(1)} ${unit || ''}`.trim();
+        }
+
+        // Función principal
+        async function loadCity(city) {
+            try {
+                const data = await fetchOpenAQ(city);
+                const aggregated = aggregateData(data);
+
+                // Procesar PM2.5 y AQI
+                if (aggregated.pm25) {
+                    const aqiData = aqiFromPM25(aggregated.pm25.value);
+                    if (aqiData) {
+                        aqiValueEl.textContent = aqiData.aqi;
+                        setAQIBadge(aqiData.category, aqiData.colorClass);
+                    } else {
+                        aqiValueEl.textContent = '—';
+                        setAQIBadge('Insufficient data', 'bg-gray-100 text-gray-800');
+                    }
+                    pm25El.textContent = formatValue(aggregated.pm25.value, aggregated.pm25.unit);
+                } else {
+                    aqiValueEl.textContent = '—';
+                    pm25El.textContent = '—';
+                    setAQIBadge('No PM2.5 data', 'bg-gray-100 text-gray-800');
+                }
+
+                // Actualizar otros contaminantes
+                o3El.textContent = formatValue(aggregated.o3?.value, aggregated.o3?.unit);
+                no2El.textContent = formatValue(aggregated.no2?.value, aggregated.no2?.unit);
+
+                // Actualizar información de tiempo
+                if (aggregated.lastUpdated) {
+                    lastUpdatedEl.textContent = `Last updated: ${new Date(aggregated.lastUpdated).toLocaleString()}`;
+                    statusEl.textContent = `Showing data for ${city}. Source: OpenAQ`;
+                    statusEl.className = 'mt-3 text-sm text-green-600';
+                } else {
+                    lastUpdatedEl.textContent = '';
+                    statusEl.textContent = `No recent data found for ${city}. Try another city.`;
+                    statusEl.className = 'mt-3 text-sm text-yellow-600';
+                }
+
+            } catch (error) {
+                console.error('Error loading city data:', error);
+                statusEl.textContent = `Error: ${error.message}`;
+                statusEl.className = 'mt-3 text-sm text-red-600';
+                
+                // Resetear valores
+                aqiValueEl.textContent = '—';
+                pm25El.textContent = '—';
+                o3El.textContent = '—';
+                no2El.textContent = '—';
+                setAQIBadge('Error', 'bg-gray-100 text-gray-800');
+                lastUpdatedEl.textContent = '';
+            }
+        }
+
+        // Event listeners
+        cityBtn.addEventListener('click', () => {
+            const city = cityInput.value.trim();
+            if (city) {
+                loadCity(city);
+            } else {
+                statusEl.textContent = 'Please enter a city name';
+                statusEl.className = 'mt-3 text-sm text-red-600';
+            }
+        });
+
+        cityInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                cityBtn.click();
+            }
+        });
+
+        // Carga inicial
+        loadCity('Lima');
+    </script>
+</body>
+</html>
